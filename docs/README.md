@@ -309,3 +309,148 @@ Docker를 사용하면 Node.js나 기타 의존성을 로컬 컴퓨터에 직접
 docker-compose down
 ```
 이 명령어는 `docker-compose.yml` 파일로 생성된 컨테이너와 네트워크를 중지하고 제거합니다.
+
+### Docker 설정 파일 상세
+
+Docker 실행에 필요한 파일들의 내용과 역할은 다음과 같습니다.
+
+#### 1. `docker-compose.yml`
+-   **역할**: Docker 컨테이너의 구성과 실행 방법을 정의합니다. `Dockerfile`을 사용하여 이미지를 빌드하고, 포트 번호를 매핑하며, 빌드 시점에 `.env` 파일의 API 키를 전달하는 역할을 합니다.
+-   **위치**: 프로젝트 최상위 경로
+
+```yaml
+# docker-compose.yml
+version: '3.8'
+
+services:
+  ai-english-tutor:
+    # 현재 디렉토리의 Dockerfile을 사용하여 Docker 이미지를 빌드합니다.
+    build:
+      context: .
+      # 호스트의 .env 파일에 있는 VITE_API_KEY를 Dockerfile에 빌드 인자(argument)로 전달합니다.
+      args:
+        - VITE_API_KEY=${VITE_API_KEY}
+    container_name: ai_english_tutor_app
+    # 호스트 머신의 8080 포트를 컨테이너의 80 포트로 매핑합니다.
+    ports:
+      - "8080:80"
+    # 사용자 정의 Nginx 설정을 마운트합니다. 이렇게 하면 이미지를 다시 빌드하지 않고도 설정을 변경할 수 있습니다.
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+    # 컨테이너가 어떤 이유로든 중지될 경우 자동으로 다시 시작합니다.
+    restart: unless-stopped
+```
+
+#### 2. `Dockerfile`
+-   **역할**: 애플리케이션의 Docker 이미지를 만들기 위한 레시피입니다. 2단계(multi-stage) 빌드 방식을 사용하여 최종 이미지 크기를 최적화합니다.
+    -   **1단계 (builder)**: Node.js 환경에서 소스 코드를 빌드하여 정적 파일(`dist` 폴더)을 생성합니다.
+    -   **2단계 (final)**: 가벼운 Nginx 웹 서버 환경에 빌드된 정적 파일만 복사하여 최종 이미지를 만듭니다.
+-   **위치**: 프로젝트 최상위 경로
+
+```dockerfile
+# Dockerfile
+# 1단계: React 애플리케이션 빌드
+FROM node:20-alpine as builder
+
+# 작업 디렉토리 설정
+WORKDIR /app
+
+# package.json과 package-lock.json 복사
+COPY package*.json ./
+
+# 의존성 설치
+RUN npm install
+
+# 나머지 애플리케이션 소스 코드 복사
+COPY . .
+
+# API 키를 위한 빌드 시점 인자 설정
+ARG VITE_API_KEY
+ENV VITE_API_KEY=${VITE_API_KEY}
+
+# 프로덕션용으로 애플리케이션 빌드
+RUN npm run build
+
+# 2단계: Nginx로 애플리케이션 제공
+FROM nginx:stable-alpine
+
+# builder 단계에서 생성된 빌드 결과물 복사
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# 사용자 정의 Nginx 설정 파일 복사
+COPY nginx/nginx.conf /etc/nginx/conf.d/default.conf
+
+# 80 포트 노출
+EXPOSE 80
+
+# Nginx 시작
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+#### 3. `nginx/nginx.conf`
+-   **역할**: Nginx 웹 서버의 설정 파일입니다. React와 같은 Single Page Application(SPA)은 클라이언트 사이드에서 라우팅을 처리하므로, 서버에 존재하지 않는 경로로 요청이 들어왔을 때 `index.html`을 반환하도록 설정(`try_files`)해야 합니다. 이 파일이 그 역할을 담당합니다.
+-   **위치**: `nginx/nginx.conf`
+
+```nginx
+# nginx/nginx.conf
+server {
+  listen 80;
+  server_name localhost;
+
+  # 정적 파일의 루트 디렉토리
+  root /usr/share/nginx/html;
+  index index.html;
+
+  # 정적 파일 직접 제공
+  location / {
+    # 요청된 파일을 먼저 찾고, 없으면 디렉토리를 찾고, 
+    # 그래도 없으면 클라이언트 사이드 라우팅을 위해 index.html로 요청을 전달합니다.
+    try_files $uri $uri/ /index.html;
+  }
+
+  # 캐싱 문제를 방지하기 위한 헤더 추가 (CSS, JS 파일)
+  location ~* \.(?:css|js)$ {
+    try_files $uri /index.html;
+    expires 1y;
+    add_header Cache-Control "public";
+  }
+
+  # 기타 정적 에셋 처리 (이미지 등)
+  location ~* \.(?:ico|gif|jpe?g|png|svg|webp)$ {
+    try_files $uri /index.html;
+    expires 1y;
+    add_header Cache-Control "public";
+  }
+}
+```
+
+#### 4. `.dockerignore`
+-   **역할**: Docker 이미지를 빌드할 때 포함하지 않을 파일이나 폴더를 지정합니다. `node_modules`나 `.env` 파일처럼 빌드에 불필요하거나 민감한 정보가 이미지에 포함되지 않도록 하여, 빌드 속도를 높이고 보안을 강화합니다.
+-   **위치**: 프로젝트 최상위 경로
+
+```
+# .dockerignore
+# 의존성
+node_modules
+
+# 빌드 결과물
+dist
+build
+
+# 환경 변수
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# IDE 관련
+.vscode
+.idea
+
+# 로그
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+```
