@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  ai-english-tutor:
+    # Build the Docker image using the Dockerfile in the current directory
+    build:
+      context: .
+      # Pass the VITE_API_KEY from the host's .env file as a build argument to the Dockerfile
+      args:
+        - VITE_API_KEY=${VITE_API_KEY}
+    container_name: ai_english_tutor_app
+    # Map port 8080 on the host machine to port 80 in the container
+    ports:
+      - "8080:80"
+    # Restart the container automatically if it stops for any reason
+    restart: unless-stopped
