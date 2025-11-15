@@ -1,0 +1,5 @@
+{
+  "name": "English Sentence Explainer",
+  "description": "An application that helps non-native speakers understand English sentences by providing full sentence explanations, word-by-word analysis, pronunciation guides in their native language, and audio playback for each word.",
+  "requestFramePermissions": []
+}
